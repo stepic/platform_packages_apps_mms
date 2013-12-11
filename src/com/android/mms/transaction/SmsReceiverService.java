@@ -20,11 +20,9 @@ package com.android.mms.transaction;
 import static android.content.Intent.ACTION_BOOT_COMPLETED;
 import static android.provider.Telephony.Sms.Intents.SMS_DELIVER_ACTION;
 
-import java.util.Calendar;
-import java.util.GregorianCalendar;
-
 import android.app.Activity;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -34,6 +32,7 @@ import android.content.IntentFilter;
 import android.database.Cursor;
 import android.database.sqlite.SqliteWrapper;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -63,6 +62,9 @@ import com.android.mms.util.SendingProgressTokenManager;
 import com.android.mms.widget.MmsWidgetProvider;
 import com.google.android.mms.MmsException;
 
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+
 /**
  * This service essentially plays the role of a "worker thread", allowing us to store
  * incoming messages to the database, update notifications, etc. without blocking the
@@ -76,7 +78,7 @@ public class SmsReceiverService extends Service {
     private boolean mSending;
 
     public static final String MESSAGE_SENT_ACTION =
-        "com.android.mms.transaction.MESSAGE_SENT";
+            "com.android.mms.transaction.MESSAGE_SENT";
 
     // Indicates next message can be picked up and sent out.
     public static final String EXTRA_MESSAGE_SENT_SEND_NEXT ="SendNextMsg";
@@ -105,14 +107,18 @@ public class SmsReceiverService extends Service {
     private static final int SEND_COLUMN_BODY       = 3;
     private static final int SEND_COLUMN_STATUS     = 4;
 
+    private static final String ACTION_SMS_ASSIGNTAG = "intent.action.sms.assigntag";
+
+    private static final String EXTRA_SMS_HANDLED = "sms_handled";
+
     private int mResultCode;
 
     @Override
     public void onCreate() {
         // Temporarily removed for this duplicate message track down.
-//        if (Log.isLoggable(LogTag.TRANSACTION, Log.VERBOSE) || LogTag.DEBUG_SEND) {
-//            Log.v(TAG, "onCreate");
-//        }
+        //        if (Log.isLoggable(LogTag.TRANSACTION, Log.VERBOSE) || LogTag.DEBUG_SEND) {
+        //            Log.v(TAG, "onCreate");
+        //        }
 
         // Start up the thread running the service.  Note that we create a
         // separate thread because the service normally runs in the process's
@@ -166,9 +172,9 @@ public class SmsReceiverService extends Service {
     @Override
     public void onDestroy() {
         // Temporarily removed for this duplicate message track down.
-//        if (Log.isLoggable(LogTag.TRANSACTION, Log.VERBOSE) || LogTag.DEBUG_SEND) {
-//            Log.v(TAG, "onDestroy");
-//        }
+        //        if (Log.isLoggable(LogTag.TRANSACTION, Log.VERBOSE) || LogTag.DEBUG_SEND) {
+        //            Log.v(TAG, "onDestroy");
+        //        }
         mServiceLooper.quit();
     }
 
@@ -205,7 +211,7 @@ public class SmsReceiverService extends Service {
                 if (MESSAGE_SENT_ACTION.equals(intent.getAction())) {
                     handleSmsSent(intent, error);
                 } else if (SMS_DELIVER_ACTION.equals(action)) {
-                    handleSmsReceived(intent, error);
+                    broadcastAssignTag(intent, error);
                 } else if (ACTION_BOOT_COMPLETED.equals(action)) {
                     handleBootCompleted();
                 } else if (TelephonyIntents.ACTION_SERVICE_STATE_CHANGED.equals(action)) {
@@ -230,6 +236,22 @@ public class SmsReceiverService extends Service {
         }
     }
 
+    private void broadcastAssignTag(final Intent smsIntent, final int error) {
+        Intent tagIntent = new Intent(ACTION_SMS_ASSIGNTAG);
+        Log.d(TAG, "Sending broadcast to assign tag");
+
+        sendOrderedBroadcast(tagIntent, null, new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent receiverIntent) {
+                Bundle results = getResultExtras(true);
+                boolean msg_handled = results.getBoolean(EXTRA_SMS_HANDLED, false);
+                Log.d(TAG, "Result assign tag broadcast received = " + msg_handled);
+                if (!msg_handled) handleSmsReceived(smsIntent, error);
+            }
+        }
+        , null, Activity.RESULT_OK, null, null);
+    }
+
     private void handleSendMessage() {
         if (!mSending) {
             sendFirstQueuedMessage();
@@ -248,9 +270,9 @@ public class SmsReceiverService extends Service {
         final Uri uri = Uri.parse("content://sms/queued");
         ContentResolver resolver = getContentResolver();
         Cursor c = SqliteWrapper.query(this, resolver, uri,
-                        SEND_PROJECTION, null, null, "date ASC");   // date ASC so we send out in
-                                                                    // same order the user tried
-                                                                    // to send messages.
+                SEND_PROJECTION, null, null, "date ASC");   // date ASC so we send out in
+        // same order the user tried
+        // to send messages.
         if (c != null) {
             try {
                 if (c.moveToFirst()) {
@@ -511,13 +533,13 @@ public class SmsReceiverService extends Service {
         int protocolIdentifier = sms.getProtocolIdentifier();
         String selection =
                 Sms.ADDRESS + " = ? AND " +
-                Sms.PROTOCOL + " = ?";
+                        Sms.PROTOCOL + " = ?";
         String[] selectionArgs = new String[] {
-            originatingAddress, Integer.toString(protocolIdentifier)
+                originatingAddress, Integer.toString(protocolIdentifier)
         };
 
         Cursor cursor = SqliteWrapper.query(context, resolver, Inbox.CONTENT_URI,
-                            REPLACE_PROJECTION, selection, selectionArgs, null);
+                REPLACE_PROJECTION, selection, selectionArgs, null);
 
         if (cursor != null) {
             try {
@@ -527,7 +549,7 @@ public class SmsReceiverService extends Service {
                             Sms.CONTENT_URI, messageId);
 
                     SqliteWrapper.update(context, resolver, messageUri,
-                                        values, null, null);
+                            values, null, null);
                     return messageUri;
                 }
             } finally {
@@ -542,7 +564,7 @@ public class SmsReceiverService extends Service {
         return s == null ? "" : s.replace('\f', '\n');
     }
 
-//    private static int count = 0;
+    //    private static int count = 0;
 
     private Uri storeMessage(Context context, SmsMessage[] msgs, int error) {
         SmsMessage sms = msgs[0];
@@ -574,16 +596,16 @@ public class SmsReceiverService extends Service {
 
         // Code for debugging and easy injection of short codes, non email addresses, etc.
         // See Contact.isAlphaNumber() for further comments and results.
-//        switch (count++ % 8) {
-//            case 0: address = "AB12"; break;
-//            case 1: address = "12"; break;
-//            case 2: address = "Jello123"; break;
-//            case 3: address = "T-Mobile"; break;
-//            case 4: address = "Mobile1"; break;
-//            case 5: address = "Dogs77"; break;
-//            case 6: address = "****1"; break;
-//            case 7: address = "#4#5#6#"; break;
-//        }
+        //        switch (count++ % 8) {
+        //            case 0: address = "AB12"; break;
+        //            case 1: address = "12"; break;
+        //            case 2: address = "Jello123"; break;
+        //            case 3: address = "T-Mobile"; break;
+        //            case 4: address = "Mobile1"; break;
+        //            case 5: address = "Dogs77"; break;
+        //            case 6: address = "****1"; break;
+        //            case 7: address = "#4#5#6#"; break;
+        //        }
 
         if (!TextUtils.isEmpty(address)) {
             Contact cacheContact = Contact.get(address,true);
@@ -659,10 +681,10 @@ public class SmsReceiverService extends Service {
         // Using NEW_TASK here is necessary because we're calling
         // startActivity from outside an activity.
         Intent smsDialogIntent = new Intent(context, ClassZeroActivity.class)
-                .putExtra("pdu", sms.getPdu())
-                .putExtra("format", format)
-                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                          | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        .putExtra("pdu", sms.getPdu())
+        .putExtra("format", format)
+        .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
 
         context.startActivity(smsDialogIntent);
     }
